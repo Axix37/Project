@@ -1,35 +1,4 @@
--- ============================================================
--- Crew Frame Scrap % — Last 14 Shift Days (PGT 1.4 ONLY)
--- Run against PGT1MESSQLODS, database ODS
---
--- Same source as power_bi/ytd_frame_scrap_pct_pgt14.sql
--- (ProcessHistoryPdrPartProducedEvent at FRAME_ASSEMBLY, decoded from
--- ExitProductStatus), rolled up to one row per crew.
--- PGT 1.1 logs frame scrap in a different table (crew_frame_scrap_14d_pgt11.sql).
---
--- Window: the 14 shift days before today's shift start, shift days
--- starting at @ShiftStartHour, same as crew_frame_fg_catchall_14d.sql.
---
--- Classification: frame ADHESIVE reject, as in "PGT14 FIN3 Framing
--- Datav0.1.jsl" (FlagYield = FAIL_ADHESIVE, REJECT ADHESIVE column):
---   FrameReject: FAIL_VISIONX ('500'), FAIL_RATIO_VISIONX ('510'),
---                FAIL_VISIONY ('600'), FAIL_RATIO_VISIONY ('610'),
---                FAIL_SILICONE_EXPIRE ('800')
---   FrameTotal:  GOOD_SCREW ('100') + GOOD_REWORK ('200') + FrameReject
---   Not counted: screw, DVM, tape, initialize, Sika and other FAIL_*
---                codes, MISS_FRAME_DATA* and the peel test sample ('850')
---
--- Returns one row per crew:
---   Crew
---   FrameTotal
---   FrameReject
---   ScrapRate    FrameReject / FrameTotal (adhesive reject %)
---   Target       0.8%
---   ActionLimit  1.0%
--- ============================================================
 
--- Day after the last day reported. Today by default; the report sets it
--- to the Monday after last week.
 DECLARE @ReportEnd DATE = CAST(GETDATE() AS DATE);
 DECLARE @ShiftStartHour      INT          = 6;
 DECLARE @WindowDays          INT          = 14;
