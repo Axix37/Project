@@ -1,30 +1,4 @@
--- ============================================================
--- Crew Rework Rerun % (Hipot) — Last 14 Shift Days
--- Run against PGT1MESSQLODS (the query reads the MesReporting database
--- by its full name, so the connection's default database doesn't matter).
---
--- Same source as the Power BI query
--- GLOBAL_HIPOT_RERUN_READTIMEHOUR_SUMMARY (Van Binh Duong, 2024-06-19):
---   Tested  SUM(PartProduced) from MesReporting.IntRi.RunTimeHipotTPV2Global
---   Rerun   rows in MesReporting.IntRi.RunTimeHipotRerunV2Global, not
---           flagged as calibration or excluded, matched to the tested
---           rows by unit (first 5 characters of SourceLocation) and hour
--- Crew is ODS.sas.GetCrew() on the site (first 4 characters of
--- SitePlant), as in the Power BI query.
---
--- Window: the 14 shift days before today's shift start, shift days
--- starting at @ShiftStartHour, same as crew_catchall_14d.sql. The UTC
--- columns are padded by 12 hours so their index can narrow the read;
--- the exact window is applied on the local hour.
---
--- Edit @Plant before running: 'PGT11%', 'PGT14%' or 'PGT2%'.
---
--- Returns one row per crew:
---   Crew
---   Tested        modules through Hipot
---   Rerun         Hipot reruns
---   ReworkRerun   Rerun / Tested
--- ============================================================
+
 
 SET NOCOUNT ON;
 
