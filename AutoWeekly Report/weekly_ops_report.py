@@ -1,33 +1,3 @@
-"""
-Weekly Operations Report — PowerPoint builder.
-
-Fills the team's own deck template (Template.pptx in this folder) every
-Monday morning instead of drawing slides from scratch. The template is the
-outline; this script only fills it in:
-
-    Title slide           report title + the week covered
-    Safety / Quality      left as the template has them: live Power BI
-                          add-in slides and the hand-filled safety table
-    Throughput            two live SQL charts: FG per day by plant, and
-                          Laminator / Jbox / Framing throughput by plant
-    Throughput Critical   one slide per plant: MA, Avg, Median P50 and
-    Area                  Utilization % per area, live SQL
-    Crew Performance      one slide per plant: throughput per shift, rework
-                          rerun, frame scrap, catchall and FG by crew
-
-Template slides that are on hold (Yield, ROC, Headcount), the spare Crew
-Performance slides and the icon library are removed from the output. See
-ARCHITECTURE.md for the full design and README.md for setup.
-
-Usage:
-    python weekly_ops_report.py
-    python weekly_ops_report.py --config config.env
-
-Schedule via Windows Task Scheduler (weekly, Monday morning):
-    Program:   python
-    Arguments: weekly_ops_report.py
-    Start in:  C:\\<path to this folder>
-"""
 
 import argparse
 import copy
@@ -51,9 +21,6 @@ from pptx.opc.packuri import PackURI
 from pptx.oxml.ns import qn
 from pptx.util import Inches, Pt
 
-# ---------------------------------------------------------------------------
-# Bootstrap
-# ---------------------------------------------------------------------------
 
 SCRIPT_DIR = Path(__file__).parent.resolve()
 
@@ -153,7 +120,6 @@ def _goal_map(name: str, plant: dict) -> dict[str, float | None]:
 
 PLANTS = parse_plants()
 
-# Allowlist guards against accidental or malicious plant-filter values —
 # every value embedded directly into a SQL string must appear here.
 _ALLOWED_PLANT_FILTERS = {f"{p['prefix']}%" for p in PLANTS}
 
@@ -168,8 +134,7 @@ if not 0 <= DAY_START_HOUR <= 23:
 
 CREWS                = [c.strip() for c in os.getenv("CREWS", "A,B,C,D").split(",") if c.strip()]
 CREW_THROUGHPUT_AREA = os.getenv("CREW_THROUGHPUT_AREA", "Framing")
-# Crew Performance covers a longer window than the rest of the deck so every
-# crew gets a fair share of shifts across the two-week rotation.
+
 CREW_WINDOW_DAYS     = int(os.getenv("CREW_WINDOW_DAYS", "14"))
 # "total": each crew's throughput over the crew window; "per_shift": that
 # total divided by the shift days the crew worked.
@@ -184,16 +149,11 @@ QUERY_FILES = dict(
     fg_daily=os.getenv("FG_DAILY_QUERY_FILE", ""),
     crew_fg=os.getenv("CREW_SCORECARD_FG_QUERY_FILE", ""),
 )
-
-# Rework rerun only exists in a Power BI app. An Excel workbook connected to
-# that Power BI semantic model is refreshed before the report reads it.
 REWORK_RERUN_WORKBOOK = os.getenv("REWORK_RERUN_WORKBOOK", "")
 REWORK_RERUN_SHEET    = os.getenv("REWORK_RERUN_SHEET", "") or 0
 REFRESH_WORKBOOK      = os.getenv("REFRESH_WORKBOOK", "true").lower() in ("1", "true", "yes")
 
-# Tool loss comes from the team's Excel log on SharePoint, read from a
-# OneDrive-synced copy. Python does the math; the summary workbook and the
-# slide's notes give Copilot the numbers to write the words from.
+
 TOOL_LOSS_FILE           = os.getenv("TOOL_LOSS_FILE", "")
 TOOL_LOSS_SHEET          = os.getenv("TOOL_LOSS_SHEET", "") or 0
 TOOL_LOSS_COLUMNS        = {"Date": "Date", "Plant": "Plant", "Tool": "Tool", "Area": "",
@@ -204,14 +164,7 @@ TOOL_LOSS_TOP_N          = int(os.getenv("TOOL_LOSS_TOP_N", "3"))
 TOOL_LOSS_WATCH_INCREASE = float(os.getenv("TOOL_LOSS_WATCH_INCREASE", "0.5"))
 TOOL_LOSS_SUMMARY_FILE   = os.getenv("TOOL_LOSS_SUMMARY_FILE", "")
 
-# Constraint: each hour, the process with the lowest capacity (uptime hours
-# x 3600 / CT, summed over its tools) among those blocked or starved for at
-# most CONSTRAINT_IDLE_MAX of their uptime; a process that was waiting
-# wasn't what held the line back. CT is each tool's actual CT that hour
-# (median time between parts), or its CT target when the hour had fewer
-# than CONSTRAINT_MIN_CYCLES cycles or an actual CT outside
-# CONSTRAINT_ACTUAL_CT_RANGE x the target. Each day shows the process that
-# was the constraint for the most hours.
+
 CONSTRAINT_QUERY_FILE = os.getenv("CONSTRAINT_QUERY_FILE", "")
 CONSTRAINT_EXCLUDE    = [x.strip().upper() for x in
                          os.getenv("CONSTRAINT_EXCLUDE", "REWORK|CVS|NPR|LED|SCRIBE").split("|") if x.strip()]
@@ -224,12 +177,7 @@ if CONSTRAINT_CT_SOURCE not in ("actual", "target"):
 if len(CONSTRAINT_ACTUAL_CT_RANGE) != 2:
     raise ValueError("CONSTRAINT_ACTUAL_CT_RANGE must be two numbers, e.g. 0.5,3")
 
-# Area loss: each day, every constraint candidate process's good modules vs
-# its daily goal (AREA_LOSS_DAILY_GOALS_<plant>, else the plant's daily FG
-# goal). When it is short by more than AREA_LOSS_THRESHOLD of the goal, the
-# shortfall is split per tool into downtime, CT (speed), waiting and quality
-# losses, in modules at the CT target. Goes to the speaker notes and the
-# summary workbook.
+.
 AREA_LOSS_THRESHOLD = float(os.getenv("AREA_LOSS_THRESHOLD", "0.02"))
 AREA_LOSS_TOP_N     = int(os.getenv("AREA_LOSS_TOP_N", "3"))
 
@@ -238,12 +186,11 @@ AREA_LOSS_TOP_N     = int(os.getenv("AREA_LOSS_TOP_N", "3"))
 GOAL_WARN_BAND = float(os.getenv("GOAL_WARN_BAND", "0.05"))
 
 # Target line on the Throughput FG chart: modules per day for all plants.
-# Blank = the sum of the daily FG goals in PLANTS; 0 = no line.
+
 FG_DAILY_TARGET = os.getenv("FG_DAILY_TARGET", "")
 # Top of the FG per day chart's y axis; blank lets PowerPoint pick it.
 FG_CHART_MAX = os.getenv("FG_CHART_MAX", "23000")
-# The report covers a full Monday-Sunday week: the one containing
-# REPORT_WEEK_ENDING (YYYY-MM-DD), or last week when it is blank.
+
 REPORT_WEEK_ENDING = os.getenv("REPORT_WEEK_ENDING", "").strip()
 
 PPTX_TEMPLATE   = os.getenv("PPTX_TEMPLATE", "Template.pptx")
@@ -254,11 +201,6 @@ log.info("Plants: %s", ", ".join(f"{p['label']} ({p['prefix']}%)" for p in PLANT
 NOT_CONFIGURED = "n/a"   # source not set up yet
 NO_GOAL        = "–"     # goal not set in config.env
 
-# ---------------------------------------------------------------------------
-# Report windows — the days before REPORT_END (the Monday after the week
-# reported): 7 for the deck (days from THROUGHPUT_DAY_START_HOUR),
-# CREW_WINDOW_DAYS for Crew Performance (shift days from SHIFT_START_HOUR)
-# ---------------------------------------------------------------------------
 
 def report_end(week_ending: str = "", today: date | None = None) -> date:
     """The Monday after the week containing week_ending; blank = last week."""
@@ -288,7 +230,7 @@ def _conn_string(server_key: str) -> str:
 
 
 def _run_query(server_key: str, sql: str) -> pd.DataFrame:
-    import pyodbc  # imported here so the deck can be built offline for testing
+    import pyodbc 
 
     conn = pyodbc.connect(_conn_string(server_key), timeout=60)
     try:
@@ -703,7 +645,7 @@ def constraint_process_names(plant: dict) -> tuple[dict[str, str], set[str]]:
     return names, rollups
 
 
-_CELL_SUFFIX_RE = r"_C?\d+$"   # FRAME_C1, LAYUP_2 -> FRAME, LAYUP
+_CELL_SUFFIX_RE = r"_C?\d+$"   # FRAME_C1-> FRAME
 _TOOL_NAME_RE   = re.compile(r"^[A-Z0-9_-]+$")
 
 
@@ -797,8 +739,7 @@ def constraint_processes(df: pd.DataFrame, plant: dict) -> pd.DataFrame:
     df = df[keep].copy()
     if df.empty:
         return df.assign(Process=pd.Series(dtype=object))
-    # Parallel cells (FRAME_C1, FRAME_C2 ...) are one process. A station named
-    # like their group (FRAME next to FRAME_C1) is a roll-up of them: skip it.
+  
     base = df["Station"].str.replace(_CELL_SUFFIX_RE, "", regex=True)
     cell_groups = set(base[base != df["Station"]])
     rollup = ~df["Station"].isin(names) & df["Station"].isin(cell_groups)
@@ -840,23 +781,19 @@ def _pick_constraints(df: pd.DataFrame, plant: dict) -> dict[date, dict]:
     daily = df.groupby(["ShiftDate", "Process"]).agg(
         Tools=("Equipment", "nunique"), CTxUp=("CTxUp", "sum"), TargetxUp=("TargetxUp", "sum"), **sums)
 
-    # Output above capacity means the CT is per lane or per load, not per module.
+  
     week = daily.groupby("Process")[["Output", "Capacity"]].sum()
     week = week[week["Capacity"] > 0]
     for proc, r in week[week["Output"] > 1.15 * week["Capacity"]].iterrows():
         log.warning("Constraint %s: %s made %.0f%% of its capacity at CT — check its CT, or set "
                     "CONSTRAINT_RATE_FACTOR for it.", plant["label"], proc, 100 * r["Output"] / r["Capacity"])
-    # Far under capacity all week means its capacity is overstated (or the
-    # process barely ran), so it would never be picked as the constraint.
+
     for proc, r in week[week["Output"] < 0.4 * week["Capacity"]].iterrows():
         log.warning("Constraint %s: %s made only %.0f%% of its capacity at CT this week — if it ran "
                     "normally, its CT may not be per module; check CONSTRAINT_RATE_FACTOR.",
                     plant["label"], proc, 100 * r["Output"] / r["Capacity"])
 
-    # A process that spent much of its uptime blocked or starved was waiting
-    # on another one, so it didn't limit the line even with less capacity:
-    # each hour's constraint is the lowest-capacity process that wasn't
-    # waiting. If every process was waiting, the lowest is kept, unconfirmed.
+  
     hourly["IdleShare"] = (hourly["Idle"] / hourly["Uptime"]).where(hourly["Uptime"] > 0)
     picks = []
     for (day, hour), grp in hourly.groupby(level=["ShiftDate", "ReadTimeHour"]):
@@ -879,7 +816,7 @@ def _pick_constraints(df: pd.DataFrame, plant: dict) -> dict[date, dict]:
         skipped = pd.Series([p for s in day_picks["skipped"] for p in s], dtype=object).value_counts()
         out[day] = dict(
             process=proc, hours=hours.to_dict(), n_hours=len(day_picks),
-            # The line's ceiling that day: each hour's constraint capacity, added up.
+           
             capacity=float(day_picks["capacity"].sum()),
             margin=float((with_next["next_capacity"] - with_next["capacity"]).sum()) if len(with_next) else None,
             confirmed=bool(day_picks["confirmed"].mean() >= 0.5),
@@ -955,8 +892,7 @@ def area_losses(df: pd.DataFrame | None, plant: dict) -> dict | None:
             target = t["TargetxUp"] / t["Up"] if t["Up"] else None
             tools.append(dict(tool=equipment, good=float(t["Good"]), ct=ct, ct_target=target,
                               **{b: float(t[b]) for b in LOSS_BUCKETS}))
-        # The tool losses that explain the shortfall: the tool's own buckets
-        # (waiting belongs to another area), largest first.
+      
         causes = sorted(((t[b], t["tool"], b, t) for t in tools for b in ("Downtime", "CT", "Quality") if t[b] > 0),
                         key=lambda c: c[0], reverse=True)
         capacity = float(r["Good"] + sum(r[b] for b in LOSS_BUCKETS))
@@ -1220,7 +1156,7 @@ def save_tool_loss_summary(m: dict | None, constraints: dict[str, dict] | None =
             for name, frame in sheets.items():
                 frame.to_excel(xl, sheet_name=name, index=False)
         log.info("Saved %s", path)
-    except Exception as exc:  # noqa: BLE001 — e.g. the file is open in Excel
+    except Exception as exc: 
         log.error("Could not save the tool loss summary %s: %s", path, exc)
 
 # ---------------------------------------------------------------------------
@@ -1259,10 +1195,7 @@ def week_label() -> str:
     ww = start.isocalendar().week
     return f"WW{ww:02d} · {start:%b %d} – {end:%b %d, %Y}"
 
-# ---------------------------------------------------------------------------
-# Template helpers (python-pptx has no slide copy / delete, so these work
-# on the slide list XML directly)
-# ---------------------------------------------------------------------------
+
 
 COLOR_NEGATIVE = RGBColor(0xC0, 0x00, 0x00)
 COLOR_GOOD     = RGBColor(0x47, 0x8D, 0x34)   # the green, yellow and red the team uses
@@ -1297,9 +1230,7 @@ def _drop_slide(prs, slide) -> None:
 
 def _add_slide(prs, layout):
     new = prs.slides.add_slide(layout)
-    # add_slide names the part slide<count+1>.xml; once template slides have
-    # been dropped that name can already belong to a kept slide, which saves
-    # as a duplicate zip entry PowerPoint has to repair.
+   
     taken = {str(part.partname) for part in prs.part.package.iter_parts() if part is not new.part}
     n = len(prs.slides)
     while f"/ppt/slides/slide{n}.xml" in taken:
@@ -1346,13 +1277,13 @@ def _set_text(shape, text: str, color: RGBColor | None = None) -> None:
         run = p.add_run()
         run.text = text
         end = p._p.find("{http://schemas.openxmlformats.org/drawingml/2006/main}endParaRPr")
-        if end is not None:  # carry the empty cell's font size over to the new text
+        if end is not None: 
             rpr = copy.deepcopy(end)
             rpr.tag = "{http://schemas.openxmlformats.org/drawingml/2006/main}rPr"
             run._r.insert(0, rpr)
     if color is not None:
         run.font.color.rgb = color
-    else:  # drop a color left over from the template, e.g. last week's red
+    else: 
         rpr = run._r.find("{http://schemas.openxmlformats.org/drawingml/2006/main}rPr")
         if rpr is not None:
             for fill in rpr.findall("{http://schemas.openxmlformats.org/drawingml/2006/main}solidFill"):
@@ -1560,7 +1491,7 @@ def build_critical_area_slide(slide, plant: dict, metrics: dict) -> None:
                        goal_color(m["median"], daily), None, goal_color(m["utilization"], 1.0)])
     table = _first_table(slide)
     if table is not None:
-        if len(table.columns) < 6:  # template has 5; a saved report already has 6
+        if len(table.columns) < 6:  
             _insert_column(table, 4, "Week total / Goal")
         _fill_table(table, rows, colors)
         _set_column_widths(table, [1.4, 1.0, 1.2, 1.4, 2.2, 1.5])
@@ -1655,7 +1586,7 @@ def _change_cell(cur: float, prev: float) -> tuple[str, RGBColor | None]:
 PLANT_TOOL_LOSS_TABLE = "Tool Loss by Tool"
 CONSTRAINT_TABLE      = "Daily Constraint"
 WHAT_HAPPENED_BOX     = "What happened"
-WHAT_HAPPENED_WIDTH   = 3.0   # inches, to the right of the tool table
+WHAT_HAPPENED_WIDTH   = 3.0  
 
 
 def _tables_bottom(slide, skip: tuple[str, ...]) -> float | None:
@@ -1674,7 +1605,7 @@ def build_constraint_row(slide, plant: dict, days: dict[date, dict] | None) -> N
     much more the next-lowest process had, over the day. '?' marks a day
     when most hours every process was often blocked or starved.
     """
-    for shape in list(slide.shapes):  # last week's row, in a deck saved from a report
+    for shape in list(slide.shapes):  
         if shape.name == CONSTRAINT_TABLE:
             shape._element.getparent().remove(shape._element)
     if days is None and not CONSTRAINT_QUERY_FILE:
@@ -1755,7 +1686,7 @@ def build_plant_tool_loss(slide, plant: dict, m: dict | None, days: dict[date, d
     a "What happened" box holds a draft from the numbers for Copilot to
     rewrite; the plant's full facts go in the speaker notes.
     """
-    for shape in list(slide.shapes):  # last week's table, in a deck saved from a report
+    for shape in list(slide.shapes): 
         if shape.name in (PLANT_TOOL_LOSS_TABLE, WHAT_HAPPENED_BOX):
             shape._element.getparent().remove(shape._element)
     area = next((s for s in slide.shapes if s.has_table), None)
@@ -1763,9 +1694,9 @@ def build_plant_tool_loss(slide, plant: dict, m: dict | None, days: dict[date, d
     width = area.width / 914400 if area is not None else 8.7
     top = (_tables_bottom(slide, (PLANT_TOOL_LOSS_TABLE,)) or 3.0) + 0.15
     row_h = 0.22
-    fit = max(int((5.0 - top) / row_h) - 1, 0)  # header row
+    fit = max(int((5.0 - top) / row_h) - 1, 0)  
     if m is None:
-        if TOOL_LOSS_FILE:  # set up but unreadable: say so instead of leaving a gap
+        if TOOL_LOSS_FILE: 
             box = slide.shapes.add_textbox(Inches(left), Inches(top), Inches(width), Inches(0.3))
             box.name = PLANT_TOOL_LOSS_TABLE
             _set_text(box, f"Tool loss {NOT_CONFIGURED}: the tool loss log couldn't be read "
@@ -1823,9 +1754,7 @@ def set_critical_notes(slide, plant: dict, m: dict | None, days: dict[date, dict
 # Deck assembly + save
 # ---------------------------------------------------------------------------
 
-# Template slides left out of the weekly deck, matched by title.
-# "Tool Loss" was an all-plants slide in earlier decks; tool loss is now on
-# each plant's Critical Area slide.
+
 DROP_TITLES = ("Yield", "Icons can be recolored", "Place icons", "Tool Loss")
 
 
@@ -1844,8 +1773,7 @@ def build_deck() -> Presentation:
     crew = _find_slide(prs, "Crew Performance", needs_table=True)
     for slide in list(prs.slides):
         title = _title_of(slide)
-        # A template saved from an earlier report already has one copy per
-        # plant; keep the first and rebuild the rest.
+      
         spare = ((title.startswith("Crew Performance") and slide is not crew)
                  or (title.startswith("Throughput Critical") and slide is not critical))
         if spare or title.startswith(DROP_TITLES):
@@ -1881,7 +1809,7 @@ def build_deck() -> Presentation:
     tool_loss = tool_loss_metrics(load_tool_loss(), {
         p["label"]: constraint_keys(constraint_by_plant[p["label"]], p) for p in PLANTS})
 
-    # One Critical Area slide and one Crew Performance slide per plant.
+ 
     for template_slide, builder, per_plant in ((critical, build_critical_area_slide, areas_by_plant),
                                                (crew, build_crew_slide, crew_by_plant)):
         if template_slide is None:
